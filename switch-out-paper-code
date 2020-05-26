@@ -4,6 +4,7 @@ from sklearn import preprocessing
 
 import torch
 from torch.autograd import Variable
+from torch import nn, Tensor
 
 def hamming_distance_sample(sents, tau, bos_id, eos_id, pad_id, vocab_size):
     """
@@ -38,13 +39,14 @@ def hamming_distance_sample(sents, tau, bos_id, eos_id, pad_id, vocab_size):
     return sampled_sents
 
 le = preprocessing.LabelEncoder()
-
-lines1 = open('data/en-es/Processed/test.processed.clean.en', encoding='utf-8').read().strip().split('\n')
+# lut = nn.Embedding(24000, 64, padding_idx= -1)
+# lines1 = open('data/en-es/Processed/test.processed.clean.en', encoding='utf-8').read().strip().split('\n')
+lines1 = [['▁Parliament', '▁Does', '▁Not', '▁Support', '▁Amendment', '▁Free', 'ing', '▁T', 'y', 'mos', 'hen', 'ko', '']]
 newline = []
 for line in lines1:
-    newline = line.split(" ")
-    newline = le.fit_transform(newline)
+    newline = le.fit_transform(line)
     newline = torch.LongTensor(newline).unsqueeze(0)
+    # newline = lut(newline)
     print(newline)
     break
 hamming_distance_sample(newline,0.95,1,2,-1,24000)
