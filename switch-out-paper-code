@@ -18,27 +18,25 @@ def hamming_distance_sample(sents, tau, bos_id, eos_id, pad_id, vocab_size):
     sents = sents.cpu()
     mask = torch.eq(sents, bos_id) | torch.eq(
         sents, eos_id) | torch.eq(sents, pad_id)
+    mask = ~mask
     lengths = mask.float().sum(dim=1)
     batch_size, n_steps = sents.size()
     # first, sample the number of words to corrupt for each sentence
     logits = torch.arange(n_steps)
     logits = logits.float().mul_(-1).unsqueeze(0).expand_as( \
-        sents).contiguous().masked_fill_(mask, -float("inf"))
+        sents).contiguous().masked_fill_(~mask, -float("inf"))
     logits = Variable(logits)
     probs = torch.nn.functional.softmax(logits.mul_(tau), dim=1)
     num_words = torch.distributions.Categorical(probs).sample()
     # sample the corrupted positions.
     old_corrupt_pos = num_words.data.float().div_(lengths).unsqueeze( \
-        1).expand_as(sents).contiguous().masked_fill_(mask, 0)
+        1).expand_as(sents).contiguous().masked_fill_(~mask, 0)
     corrupt_pos = old_corrupt_pos.clone()
-    corrupt_pos[old_corrupt_pos < 0] = 0
-    corrupt_pos[old_corrupt_pos > 1] = 1
     corrupt_pos = torch.bernoulli(corrupt_pos, out=corrupt_pos).byte()
     new_corrupt_pos = corrupt_pos.clone().bool()
     new_corrupt_pos[corrupt_pos == 1] = True
     new_corrupt_pos[corrupt_pos == 0] = False
     total_words = int(corrupt_pos.sum())
-    # print(total_words)
     # sample the corrupted values, which will be added to sents
     corrupt_val = torch.LongTensor(total_words)
     corrupt_val = corrupt_val.random_(1, vocab_size)
