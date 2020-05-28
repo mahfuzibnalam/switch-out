@@ -15,27 +15,40 @@ def hamming_distance_sample(sents, tau, bos_id, eos_id, pad_id, vocab_size):
     Returns:
         sampled_sents:  Tensor [batch_size, n_steps]. The corrupted sentences.
     """
-    mask = torch.eq(sents, bos_id) | torch.eq(sents, eos_id) | torch.eq(sents, pad_id)
+    sents = sents.cpu()
+    mask = torch.eq(sents, bos_id) | torch.eq(
+        sents, eos_id) | torch.eq(sents, pad_id)
     lengths = mask.float().sum(dim=1)
     batch_size, n_steps = sents.size()
     # first, sample the number of words to corrupt for each sentence
     logits = torch.arange(n_steps)
-    logits = logits.float().mul_(-1).unsqueeze(0).expand_as(sents).contiguous().masked_fill_(mask, -float("inf"))
+    logits = logits.float().mul_(-1).unsqueeze(0).expand_as( \
+        sents).contiguous().masked_fill_(mask, -float("inf"))
     logits = Variable(logits)
     probs = torch.nn.functional.softmax(logits.mul_(tau), dim=1)
     num_words = torch.distributions.Categorical(probs).sample()
     # sample the corrupted positions.
-    corrupt_pos = num_words.data.float().div_(lengths).unsqueeze(1).expand_as(sents).contiguous().masked_fill_(mask, 0)
+    old_corrupt_pos = num_words.data.float().div_(lengths).unsqueeze( \
+        1).expand_as(sents).contiguous().masked_fill_(mask, 0)
+    corrupt_pos = old_corrupt_pos.clone()
+    corrupt_pos[old_corrupt_pos < 0] = 0
+    corrupt_pos[old_corrupt_pos > 1] = 1
     corrupt_pos = torch.bernoulli(corrupt_pos, out=corrupt_pos).byte()
+    new_corrupt_pos = corrupt_pos.clone().bool()
+    new_corrupt_pos[corrupt_pos == 1] = True
+    new_corrupt_pos[corrupt_pos == 0] = False
     total_words = int(corrupt_pos.sum())
+    # print(total_words)
     # sample the corrupted values, which will be added to sents
     corrupt_val = torch.LongTensor(total_words)
     corrupt_val = corrupt_val.random_(1, vocab_size)
     corrupts = torch.zeros(batch_size, n_steps).long()
-    corrupts = corrupts.masked_scatter_(corrupt_pos, corrupt_val)
+    corrupts = corrupts.masked_scatter_(new_corrupt_pos, corrupt_val)
     sampled_sents = sents.add(Variable(corrupts)).remainder_(vocab_size)
+    print(sents)
+    print("----")
     print(sampled_sents)
-    return sampled_sents
+    return sampled_sents.cuda()
 
 # lut = nn.Embedding(24000, 64, padding_idx= -1)
 # lines1 = open('data/en-es/Processed/test.processed.clean.en', encoding='utf-8').read().strip().split('\n')
@@ -43,4 +56,4 @@ lines =    [[1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 2],
             [1, 3, 4, 5, 6, 7, 8, 9, 2, 0, 0, 0, 0, 0]]
 newlines = torch.LongTensor(lines)
 print(newlines)
-hamming_distance_sample(newlines,0.95,1,2,0,24000)
+hamming_distance_sample(newlines,1,1,2,0,24000)
