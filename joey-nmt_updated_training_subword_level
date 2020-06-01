@@ -316,6 +316,7 @@ class TrainManager:
                         switch_out=True, vocab=self.model.src_vocab)
                 else:
                     batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda)
+
                 # only update every batch_multiplier batches
                 # see https://medium.com/@davidlmorton/
                 # increasing-mini-batch-size-without-increasing-
