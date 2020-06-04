@@ -37,10 +37,9 @@ class Batch:
         """
         self.src, self.src_lengths = torch_batch.src
         if switch_out:
-            self.src = self.subword_to_word(self.src,
+            self.src, src_str = self.subword_to_word(self.src,
                                             src_subword_vocab,
                                             subword_src_model_file,
-                                            src_word_vocab,
                                             pad_index)
 
             self.src = self.hamming_distance_sample(self.src,
@@ -51,6 +50,7 @@ class Batch:
                                                     len(src_word_vocab))
 
             self.src = self.word_to_subword(self.src,
+                                            src_str,
                                             src_subword_vocab,
                                             subword_src_model_file,
                                             src_word_vocab,
@@ -88,11 +88,11 @@ class Batch:
                         sents,
                         src_subword_vocab,
                         subword_src_model_file,
-                        src_word_vocab,
                         pad_id):
         sp = spm.SentencePieceProcessor()
         sp.Load(subword_src_model_file)
-        new_sents = []
+        new_num_sents = []
+        new_str_sents = []
         max_length = 0
 
         for sent in sents:
@@ -104,30 +104,26 @@ class Batch:
                     new_sent.append(src_subword_vocab[item])
 
             new_sent = sp.DecodePieces(new_sent)
-
             new_sent = word_tokenize(new_sent)
+            final_sent = [0] * len(new_sent)
 
-            final_sent = []
-            for item in new_sent:
-                if item not in src_word_vocab:
-                    final_sent.append(0)
-                else:
-                    final_sent.append(src_word_vocab.index(item))
+            if len(final_sent) == 0:
+                final_sent.append(0)
+                new_sent.append("this")
 
             max_length = max(max_length, len(final_sent))
+            new_num_sents.append(final_sent)
+            new_str_sents.append(new_sent)
 
-            new_sents.append(final_sent)
         max_length += 1
 
-        for sent in new_sents:
-            if len(sent) == 0:
-                sent.append(4)
-            sent.append(2)
+        for sent in new_num_sents:
+            sent.append(3)
             while len(sent) < max_length:
                 sent.append(pad_id)
 
-        new_sents = torch.LongTensor(new_sents)
-        return new_sents
+        new_num_sents = torch.LongTensor(new_num_sents)
+        return new_num_sents, new_str_sents
 
     def hamming_distance_sample(self,
                                 sents,
@@ -159,14 +155,15 @@ class Batch:
         total_words = int(corrupt_pos.sum())
 
         corrupt_val = torch.LongTensor(total_words)
-        corrupt_val = corrupt_val.random_(1, vocab_size)
+        corrupt_val = corrupt_val.random_(5, vocab_size)
         corrupts = torch.zeros(batch_size, n_steps).long()
         corrupts = corrupts.masked_scatter_(new_corrupt_pos, corrupt_val)
         sampled_sents = sents.add(Variable(corrupts)).remainder_(vocab_size)
-        return sampled_sents.cuda()
+        return sampled_sents
 
     def word_to_subword(self,
                         sents,
+                        str_sents,
                         src_subword_vocab,
                         subword_src_model_file,
                         src_word_vocab,
@@ -176,15 +173,14 @@ class Batch:
         new_sents = []
         max_length = 0
 
-        for sent in sents:
-            sent = sent.tolist()
-            new_sent = []
-            for item in sent:
-                if item > 3:
-                    new_sent.append(src_word_vocab[item])
+        for ids, sent in enumerate(str_sents):
+            for idw, item in enumerate(sent):
+                if sents[ids][idw] > 3:
+                    str_sents[ids][idw] = src_word_vocab[sents[ids][idw]]
 
+        for sent in str_sents:
             sentence = ""
-            for item in new_sent:
+            for item in sent:
                 sentence += item
                 sentence += " "
 
@@ -196,10 +192,9 @@ class Batch:
                     final_sent.append(0)
                 else:
                     final_sent.append(src_subword_vocab.index(item))
-            final_sent.append(2)
+            final_sent.append(3)
 
             max_length = max(max_length, len(final_sent))
-
             new_sents.append(final_sent)
 
         for sent in new_sents:
