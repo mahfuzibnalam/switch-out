@@ -1,0 +1,260 @@
+# coding: utf-8
+
+"""
+Implementation of a mini-batch.
+"""
+import random
+import torch
+import sentencepiece as spm
+from torch.autograd import Variable
+from nltk.tokenize import word_tokenize
+
+
+class Batch:
+    """Object for holding a batch of data with mask during training.
+    Input is a batch from a torch text iterator.
+    """
+
+    def __init__(self,
+                torch_batch,
+                pad_index,
+                use_cuda=False,
+                bos_index=3,
+                eos_index=2,
+                tau=1,
+                switch_out=None,
+                subword_src_model_file=None,
+                src_subword_vocab=None,
+                src_vatole_vocab=None,
+                src_letova_vocab=None):
+        """
+        Create a new joey batch from a torch batch.
+        This batch extends torch text's batch attributes with src and trg
+        length, masks, number of non-padded tokens in trg.
+        Furthermore, it can be sorted by src length.
+
+        :param torch_batch:
+        :param pad_index:
+        :param use_cuda:
+        """
+        self.src, self.src_lengths = torch_batch.src
+        if switch_out:
+            self.src, src_str = self.subword_to_word(self.src,
+                                            src_subword_vocab,
+                                            subword_src_model_file,
+                                            pad_index)
+
+            self.src = self.hamming_distance_sample(self.src,
+                                                    tau,
+                                                    bos_index,
+                                                    eos_index,
+                                                    pad_index)
+
+            self.src = self.word_to_subword(self.src,
+                                            src_str,
+                                            src_subword_vocab,
+                                            subword_src_model_file,
+                                            pad_index,
+                                            src_letova_vocab,
+                                            src_vatole_vocab)
+
+            length = []
+            for _ in range(self.src_lengths.shape[0]):
+                length.append(self.src.shape[1])
+            self.src_lengths = torch.LongTensor(length)
+
+        self.src_mask = (self.src != pad_index).unsqueeze(1)
+        self.nseqs = self.src.size(0)
+        self.trg_input = None
+        self.trg = None
+        self.trg_mask = None
+        self.trg_lengths = None
+        self.ntokens = None
+        self.use_cuda = use_cuda
+
+        if hasattr(torch_batch, "trg"):
+            trg, trg_lengths = torch_batch.trg
+            # trg_input is used for teacher forcing, last one is cut off
+            self.trg_input = trg[:, :-1]
+            self.trg_lengths = trg_lengths
+            # trg is used for loss computation, shifted by one since BOS
+            self.trg = trg[:, 1:]
+            # we exclude the padded areas from the loss computation
+            self.trg_mask = (self.trg_input != pad_index).unsqueeze(1)
+            self.ntokens = (self.trg != pad_index).data.sum().item()
+
+        if use_cuda:
+            self._make_cuda()
+
+    def subword_to_word(self,
+                        sents,
+                        src_subword_vocab,
+                        subword_src_model_file,
+                        pad_id):
+        sp = spm.SentencePieceProcessor()
+        sp.Load(subword_src_model_file)
+        new_num_sents = []
+        new_str_sents = []
+        max_length = 0
+
+        for sent in sents:
+            sent = sent.tolist()
+
+            new_sent = []
+            for item in sent:
+                if item > 3:
+                    new_sent.append(src_subword_vocab[item])
+
+            new_sent = sp.DecodePieces(new_sent)
+            new_sent = word_tokenize(new_sent)
+            final_sent = [0] * len(new_sent)
+
+            if len(final_sent) == 0:
+                final_sent.append(0)
+                new_sent.append("this")
+
+            max_length = max(max_length, len(final_sent))
+            new_num_sents.append(final_sent)
+            new_str_sents.append(new_sent)
+
+        max_length += 1
+
+        for sent in new_num_sents:
+            sent.append(3)
+            while len(sent) < max_length:
+                sent.append(pad_id)
+
+        new_num_sents = torch.LongTensor(new_num_sents)
+        return new_num_sents, new_str_sents
+
+    def hamming_distance_sample(self,
+                                sents,
+                                tau,
+                                bos_id,
+                                eos_id,
+                                pad_id):
+        sents = sents.cpu()
+        mask = torch.eq(sents, bos_id) | torch.eq(
+            sents, eos_id) | torch.eq(sents, pad_id)
+        mask = ~mask
+        lengths = mask.float().sum(dim=1)
+        batch_size, n_steps = sents.size()
+
+        logits = torch.arange(n_steps)
+        logits = logits.float().mul_(-1).unsqueeze(0).expand_as( \
+            sents).contiguous().masked_fill_(~mask, -float("inf"))
+        logits = Variable(logits)
+        probs = torch.nn.functional.softmax(logits.mul_(tau), dim=1)
+        num_words = torch.distributions.Categorical(probs).sample()
+
+        corrupt_pos = num_words.data.float().div_(lengths).unsqueeze( \
+            1).expand_as(sents).contiguous().masked_fill_(~mask, 0)
+        corrupt_pos = torch.bernoulli(corrupt_pos, out=corrupt_pos).byte()
+        new_corrupt_pos = corrupt_pos.clone().bool()
+        new_corrupt_pos[corrupt_pos == 1] = True
+        new_corrupt_pos[corrupt_pos == 0] = False
+        total_words = int(corrupt_pos.sum())
+
+        corrupt_val = torch.LongTensor(total_words)
+        corrupt_val = corrupt_val.random_(5, 500)
+        corrupts = torch.zeros(batch_size, n_steps).long()
+        corrupts = corrupts.masked_scatter_(new_corrupt_pos, corrupt_val)
+        sampled_sents = sents.add(Variable(corrupts)).remainder_(500)
+        return sampled_sents
+
+    def word_to_subword(self,
+                        sents,
+                        str_sents,
+                        src_subword_vocab,
+                        subword_src_model_file,
+                        pad_id,
+                        src_letova,
+                        src_vatole):
+        sp = spm.SentencePieceProcessor()
+        sp.Load(subword_src_model_file)
+        new_sents = []
+        max_length = 0
+
+        for ids, sent in enumerate(str_sents):
+            for idw, item in enumerate(sent):
+                if sents[ids][idw] > 3:
+                    va_word = str_sents[ids][idw]
+                    if va_word in src_vatole:
+                        le_word = src_vatole[va_word]
+                        index = random.randint(1, len(src_letova[le_word]))
+                        str_sents[ids][idw] = src_letova[le_word][index - 1]
+
+        for sent in str_sents:
+            sentence = ""
+            for item in sent:
+                sentence += item
+                sentence += " "
+
+            new_sent = sp.EncodeAsPieces(sentence)
+
+            final_sent = []
+            for item in new_sent:
+                if item not in src_subword_vocab:
+                    final_sent.append(0)
+                else:
+                    final_sent.append(src_subword_vocab.index(item))
+            final_sent.append(3)
+
+            max_length = max(max_length, len(final_sent))
+            new_sents.append(final_sent)
+
+        for sent in new_sents:
+            while len(sent) < max_length:
+                sent.append(pad_id)
+
+        new_sents = torch.LongTensor(new_sents)
+        return new_sents
+
+    def _make_cuda(self):
+        """
+        Move the batch to GPU
+
+        :return:
+        """
+        self.src = self.src.cuda()
+        self.src_mask = self.src_mask.cuda()
+
+        if self.trg_input is not None:
+            self.trg_input = self.trg_input.cuda()
+            self.trg = self.trg.cuda()
+            self.trg_mask = self.trg_mask.cuda()
+
+    def sort_by_src_lengths(self):
+        """
+        Sort by src length (descending) and return index to revert sort
+
+        :return:
+        """
+        _, perm_index = self.src_lengths.sort(0, descending=True)
+        rev_index = [0]*perm_index.size(0)
+        for new_pos, old_pos in enumerate(perm_index.cpu().numpy()):
+            rev_index[old_pos] = new_pos
+
+        sorted_src_lengths = self.src_lengths[perm_index]
+        sorted_src = self.src[perm_index]
+        sorted_src_mask = self.src_mask[perm_index]
+        if self.trg_input is not None:
+            sorted_trg_input = self.trg_input[perm_index]
+            sorted_trg_lengths = self.trg_lengths[perm_index]
+            sorted_trg_mask = self.trg_mask[perm_index]
+            sorted_trg = self.trg[perm_index]
+
+        self.src = sorted_src
+        self.src_lengths = sorted_src_lengths
+        self.src_mask = sorted_src_mask
+
+        if self.trg_input is not None:
+            self.trg_input = sorted_trg_input
+            self.trg_mask = sorted_trg_mask
+            self.trg_lengths = sorted_trg_lengths
+            self.trg = sorted_trg
+
+        if self.use_cuda:
+            self._make_cuda()
+
+        return rev_index
