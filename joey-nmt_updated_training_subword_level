@@ -311,9 +311,14 @@ class TrainManager:
                 self.model.train()
                 # create a Batch object from torchtext batch
                 if self.switch_out:
-                    batch = Batch(batch, self.pad_index, self.bos_index, \
-                        self.eos_index, self.tau_src, use_cuda=self.use_cuda, \
-                        switch_out=True, vocab=self.model.src_vocab)
+                    batch = Batch(batch,
+                            self.pad_index,
+                            self.bos_index,
+                            self.eos_index,
+                            self.tau_src,
+                            use_cuda=self.use_cuda,
+                            switch_out=True,
+                            vocab=self.model.src_vocab)
                 else:
                     batch = Batch(batch, self.pad_index, use_cuda=self.use_cuda)
 
