@@ -87,7 +87,7 @@ class Batch:
         total_words = int(corrupt_pos.sum())
         # sample the corrupted values, which will be added to sents
         corrupt_val = torch.LongTensor(total_words)
-        corrupt_val = corrupt_val.random_(1, vocab_size)
+        corrupt_val = corrupt_val.random_(5, vocab_size)
         corrupts = torch.zeros(batch_size, n_steps).long()
         corrupts = corrupts.masked_scatter_(new_corrupt_pos, corrupt_val)
         sampled_sents = sents.add(Variable(corrupts)).remainder_(vocab_size)
