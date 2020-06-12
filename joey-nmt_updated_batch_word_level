@@ -6,7 +6,6 @@ Implementation of a mini-batch.
 import torch
 import sentencepiece as spm
 from torch.autograd import Variable
-from nltk.tokenize import word_tokenize
 
 
 class Batch:
@@ -104,7 +103,7 @@ class Batch:
                     new_sent.append(src_subword_vocab[item])
 
             new_sent = sp.DecodePieces(new_sent)
-            new_sent = word_tokenize(new_sent)
+            new_sent = new_sent.split(" ")
             final_sent = [0] * len(new_sent)
 
             if len(final_sent) == 0:
