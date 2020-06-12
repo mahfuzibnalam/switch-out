@@ -7,7 +7,6 @@ import random
 import torch
 import sentencepiece as spm
 from torch.autograd import Variable
-from nltk.tokenize import word_tokenize
 
 
 class Batch:
@@ -19,8 +18,8 @@ class Batch:
                 torch_batch,
                 pad_index,
                 use_cuda=False,
-                bos_index=3,
-                eos_index=2,
+                bos_index=2,
+                eos_index=3,
                 tau=1,
                 switch_out=None,
                 subword_src_model_file=None,
@@ -106,7 +105,7 @@ class Batch:
                     new_sent.append(src_subword_vocab[item])
 
             new_sent = sp.DecodePieces(new_sent)
-            new_sent = word_tokenize(new_sent)
+            new_sent = new_sent.split(" ")
             final_sent = [0] * len(new_sent)
 
             if len(final_sent) == 0:
