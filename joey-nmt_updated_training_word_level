@@ -75,6 +75,7 @@ class TrainManager:
             .get("switch_out_word_src_vocab", None)
         self.subword_src_model_file = data_config \
             .get("switch_out_subword_src_model", None)
+        print(self.src_word_vocab_file)
 
         # objective
         self.label_smoothing = train_config.get("label_smoothing", 0.0)
